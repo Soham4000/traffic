@@ -13,35 +13,51 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Download repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Install Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+      # 3. Upgrade pip
       - name: Upgrade pip
         run: |
           python -m pip install --upgrade pip
 
+      # 4. Install project requirements
       - name: Install requirements
         run: |
           pip install -r requirements.txt
 
+      # 5. Find Python files
+      - name: Show Python files
+        run: |
+          echo "Python files in repository:"
+          find . -name "*.py" -not -path "./.git/*"
+
+      # 6. Check syntax of ALL Python files
       - name: Check Python syntax
         run: |
-          python -m py_compile vehicle_detection_app.py
+          python -m compileall -q .
 
-      - name: Check important packages
+      # 7. Test important libraries
+      - name: Test imports
         run: |
           python -c "import streamlit; print('Streamlit OK')"
           python -c "import cv2; print('OpenCV OK')"
+          python -c "import numpy; print('NumPy OK')"
           python -c "import torch; print('PyTorch OK')"
           python -c "import ultralytics; print('Ultralytics OK')"
           python -c "import requests; print('Requests OK')"
-          python -c "import easyocr; print('EasyOCR OK')"
+          python -c "import PIL; print('Pillow OK')"
 
-      - name: Finish
+      # 8. Finish
+      - name: Build check completed
         run: |
-          echo "Vehicle Detection project passed basic checks."
+          echo "======================================"
+          echo "Vehicle Detection project check passed"
+          echo "======================================"
