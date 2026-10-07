@@ -28,13 +28,11 @@ TELEGRAM SETUP
 2. Send any message to your bot (or add it to a group and message there).
 3. Open https://api.telegram.org/bot<TOKEN>/getUpdates and copy chat -> id
    (group IDs are negative numbers).
-4. Provide the two values in ANY ONE of these ways:
-   a) Type them into the app's sidebar ("Enter Telegram details manually"),
-   b) a .env file next to this script (pip install python-dotenv):
-          TELEGRAM_BOT_TOKEN=...
-          TELEGRAM_CHAT_ID=...
-   c) .streamlit/secrets.toml, or
-   d) environment variables BEFORE running streamlit:
+4. Store both values ONLY as GitHub secrets named TELEGRAM_BOT_TOKEN and
+   TELEGRAM_CHAT_ID (Repo -> Settings -> Secrets and variables). They are
+   injected as environment variables when the app runs in GitHub Codespaces
+   or GitHub Actions; the code never contains or asks for the token.
+   For a quick local test only, you can instead set them as environment variables:
 
    Windows (PowerShell):
        $env:TELEGRAM_BOT_TOKEN="123456:ABC..."
@@ -321,15 +319,9 @@ init_db()
 # Sending runs in a background thread so the video loop never stalls on
 # network latency.
 # ---------------------------------------------------------------------------
-try:
-    from dotenv import load_dotenv   # optional: pip install python-dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-
 def _get_secret(name):
-    """Look in env vars / .env first, then Streamlit secrets (.streamlit/secrets.toml)."""
+    """Read from environment variables (where GitHub Codespaces/Actions secrets
+    land), falling back to Streamlit's own secrets store if deployed there."""
     val = os.environ.get(name)
     if val:
         return val
@@ -630,19 +622,6 @@ input_source = st.sidebar.radio(
 # --- Telegram alert settings ---
 st.sidebar.header("📲 Telegram Alerts")
 
-# If nothing was found in env vars / .env / secrets, let the user type the
-# same bot token + chat ID they used in their other projects.
-if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
-    with st.sidebar.expander("Enter Telegram details manually", expanded=True):
-        typed_token = st.text_input("Bot token", type="password", key="tg_token_input")
-        typed_chat = st.text_input("Chat ID", key="tg_chat_input")
-        if typed_token:
-            TELEGRAM_BOT_TOKEN = typed_token.strip()
-        if typed_chat:
-            TELEGRAM_CHAT_ID = typed_chat.strip()
-
-TELEGRAM_AVAILABLE = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID and REQUESTS_AVAILABLE)
-
 if TELEGRAM_AVAILABLE:
     st.sidebar.success("Telegram connected")
     if st.sidebar.button("📨 Send test message"):
@@ -664,7 +643,10 @@ else:
     if not REQUESTS_AVAILABLE:
         st.sidebar.warning("Install `requests` (pip install requests) to enable Telegram alerts.")
     else:
-        st.sidebar.warning("Telegram alerts OFF — enter your token and chat ID above.")
+        st.sidebar.warning(
+            "Telegram alerts OFF — TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID were not "
+            "found in the environment. Add them as GitHub (Codespaces/Actions) secrets."
+        )
 
 uploaded_file = None
 cctv_url = None
