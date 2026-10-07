@@ -28,7 +28,13 @@ TELEGRAM SETUP
 2. Send any message to your bot (or add it to a group and message there).
 3. Open https://api.telegram.org/bot<TOKEN>/getUpdates and copy chat -> id
    (group IDs are negative numbers).
-4. Set environment variables BEFORE running streamlit:
+4. Provide the two values in ANY ONE of these ways:
+   a) Type them into the app's sidebar ("Enter Telegram details manually"),
+   b) a .env file next to this script (pip install python-dotenv):
+          TELEGRAM_BOT_TOKEN=...
+          TELEGRAM_CHAT_ID=...
+   c) .streamlit/secrets.toml, or
+   d) environment variables BEFORE running streamlit:
 
    Windows (PowerShell):
        $env:TELEGRAM_BOT_TOKEN="123456:ABC..."
@@ -315,8 +321,29 @@ init_db()
 # Sending runs in a background thread so the video loop never stalls on
 # network latency.
 # ---------------------------------------------------------------------------
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+try:
+    from dotenv import load_dotenv   # optional: pip install python-dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+
+def _get_secret(name):
+    """Look in env vars / .env first, then Streamlit secrets (.streamlit/secrets.toml)."""
+    val = os.environ.get(name)
+    if val:
+        return val
+    try:
+        val = st.secrets.get(name)
+        if val:
+            return str(val)
+    except Exception:
+        pass
+    return None
+
+
+TELEGRAM_BOT_TOKEN = _get_secret("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = _get_secret("TELEGRAM_CHAT_ID")
 TELEGRAM_AVAILABLE = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID and REQUESTS_AVAILABLE)
 
 TELEGRAM_MODE_OFF = "Off"
@@ -328,14 +355,29 @@ TELEGRAM_MODE_BOTH = "Both (instant + confirmation)"
 def _send_telegram_photo(jpeg_bytes, caption):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-        requests.post(
+        r = requests.post(
             url,
             data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption[:1000]},
             files={"photo": ("violation.jpg", jpeg_bytes, "image/jpeg")},
             timeout=20,
         )
+        if not r.ok:
+            print(f"Telegram error {r.status_code}: {r.text}")
     except Exception as e:
         print(f"Telegram send failed: {e}")
+
+
+def send_telegram_test():
+    """Synchronous test so you can see the exact error, if any."""
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": "✅ Test from Vehicle Detection app"},
+            timeout=15,
+        )
+        return r.ok, r.text
+    except Exception as e:
+        return False, str(e)
 
 
 def send_telegram_alert(jpeg_bytes, location, vehicle_type, track_id, confidence,
@@ -587,8 +629,28 @@ input_source = st.sidebar.radio(
 
 # --- Telegram alert settings ---
 st.sidebar.header("📲 Telegram Alerts")
+
+# If nothing was found in env vars / .env / secrets, let the user type the
+# same bot token + chat ID they used in their other projects.
+if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
+    with st.sidebar.expander("Enter Telegram details manually", expanded=True):
+        typed_token = st.text_input("Bot token", type="password", key="tg_token_input")
+        typed_chat = st.text_input("Chat ID", key="tg_chat_input")
+        if typed_token:
+            TELEGRAM_BOT_TOKEN = typed_token.strip()
+        if typed_chat:
+            TELEGRAM_CHAT_ID = typed_chat.strip()
+
+TELEGRAM_AVAILABLE = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID and REQUESTS_AVAILABLE)
+
 if TELEGRAM_AVAILABLE:
     st.sidebar.success("Telegram connected")
+    if st.sidebar.button("📨 Send test message"):
+        ok, detail = send_telegram_test()
+        if ok:
+            st.sidebar.success("Test message sent — check Telegram")
+        else:
+            st.sidebar.error(f"Failed: {detail}")
     telegram_mode = st.sidebar.selectbox(
         "Send violation images",
         [TELEGRAM_MODE_INSTANT, TELEGRAM_MODE_ACCEPTED, TELEGRAM_MODE_BOTH, TELEGRAM_MODE_OFF],
@@ -602,10 +664,7 @@ else:
     if not REQUESTS_AVAILABLE:
         st.sidebar.warning("Install `requests` (pip install requests) to enable Telegram alerts.")
     else:
-        st.sidebar.warning(
-            "Telegram alerts OFF — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID "
-            "environment variables and restart."
-        )
+        st.sidebar.warning("Telegram alerts OFF — enter your token and chat ID above.")
 
 uploaded_file = None
 cctv_url = None
