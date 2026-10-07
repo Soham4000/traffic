@@ -1,0 +1,12 @@
+streamlit
+opencv-python-headless
+numpy
+requests
+ultralytics
+torch
+torchvision
+huggingface_hub
+easyocr
+anthropic
+lapx
+Pillow
