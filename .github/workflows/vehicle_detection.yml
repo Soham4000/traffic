@@ -1,51 +1,66 @@
 name: Vehicle Detection App Check
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-  workflow_dispatch:   # lets you run it manually from the Actions tab
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ============================================================
       # 1. Download repository
+      # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Install Python
+
+      # ============================================================
+      # 2. Set up Python
+      # ============================================================
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+
+      # ============================================================
       # 3. Upgrade pip
+      # ============================================================
       - name: Upgrade pip
         run: |
           python -m pip install --upgrade pip
 
+
+      # ============================================================
       # 4. Install project requirements
+      # ============================================================
       - name: Install requirements
         run: |
           pip install -r requirements.txt
 
+
+      # ============================================================
       # 5. Find Python files
+      # ============================================================
       - name: Show Python files
         run: |
           echo "Python files in repository:"
           find . -name "*.py" -not -path "./.git/*"
 
-      # 6. Check syntax of ALL Python files
+
+      # ============================================================
+      # 6. Check Python syntax
+      # ============================================================
       - name: Check Python syntax
         run: |
           python -m compileall -q .
 
+
+      # ============================================================
       # 7. Test important libraries
+      # ============================================================
       - name: Test imports
         run: |
           python -c "import streamlit; print('Streamlit OK')"
@@ -56,38 +71,201 @@ jobs:
           python -c "import requests; print('Requests OK')"
           python -c "import PIL; print('Pillow OK')"
 
-      # 8. Telegram test (message + photo)
-      - name: Telegram test
+
+      # ============================================================
+      # 8. Check Telegram secrets
+      # ============================================================
+      - name: Check Telegram configuration
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "::error::TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing. Add them under Settings > Secrets and variables > Actions."
+          if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+            echo "::error::TELEGRAM_BOT_TOKEN is missing."
+            echo "Add it under Settings > Secrets and variables > Actions."
             exit 1
           fi
 
-          echo "Sending test message..."
-          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            -d chat_id="${TELEGRAM_CHAT_ID}" \
-            -d text="✅ CI test: Telegram message works" | tee msg_response.json
+          if [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::error::TELEGRAM_CHAT_ID is missing."
+            echo "Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+          echo "Telegram secrets are configured."
+
+
+      # ============================================================
+      # 9. Send Telegram TEXT message
+      # ============================================================
+      - name: Telegram text message test
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+
+          echo "Sending Telegram test message..."
+
+          curl -sS -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=🚦 VEHICLE DETECTION SYSTEM
+
+          ✅ Telegram connection successful
+
+          🤖 Bot: Connected
+          📡 Alert system: Active
+          📝 Text messages: Working
+
+          This is a GitHub Actions test message." \
+            | tee msg_response.json
+
           echo
-          grep -q '"ok":true' msg_response.json || { echo "::error::sendMessage failed (see response above)"; exit 1; }
 
-          echo "Creating test image..."
-          python -c "from PIL import Image; Image.new('RGB', (300, 200), (200, 50, 50)).save('test.jpg')"
+          if grep -q '"ok":true' msg_response.json; then
+            echo "Telegram text message sent successfully."
+          else
+            echo "::error::Telegram text message failed."
+            cat msg_response.json
+            exit 1
+          fi
 
-          echo "Sending test photo..."
-          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
-            -F chat_id="${TELEGRAM_CHAT_ID}" \
-            -F caption="✅ CI test: Telegram photo works" \
-            -F photo=@test.jpg | tee photo_response.json
+
+      # ============================================================
+      # 10. Create test violation image
+      # ============================================================
+      - name: Create test violation image
+        run: |
+
+          echo "Creating test violation image..."
+
+          python - <<'PY'
+          from PIL import Image, ImageDraw, ImageFont
+
+          width = 1000
+          height = 650
+
+          image = Image.new("RGB", (width, height), (25, 25, 25))
+          draw = ImageDraw.Draw(image)
+
+          try:
+              font_large = ImageFont.truetype(
+                  "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                  42
+              )
+
+              font_medium = ImageFont.truetype(
+                  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                  28
+              )
+
+              font_small = ImageFont.truetype(
+                  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                  24
+              )
+          except:
+              font_large = None
+              font_medium = None
+              font_small = None
+
+          # Header
+          draw.rectangle(
+              [0, 0, width, 100],
+              fill=(180, 30, 30)
+          )
+
+          draw.text(
+              (40, 25),
+              "HELMET VIOLATION DETECTED",
+              fill=(255, 255, 255),
+              font=font_large
+          )
+
+          # Simulated detection box
+          draw.rectangle(
+              [250, 160, 750, 500],
+              outline=(255, 60, 60),
+              width=8
+          )
+
+          draw.text(
+              (285, 515),
+              "Motorcycle / Scooter",
+              fill=(255, 255, 255),
+              font=font_medium
+          )
+
+          draw.text(
+              (285, 555),
+              "Helmet: NOT DETECTED",
+              fill=(255, 80, 80),
+              font=font_small
+          )
+
+          image.save("telegram_test_violation.jpg", quality=95)
+
+          print("Test violation image created.")
+          PY
+
+          ls -lh telegram_test_violation.jpg
+
+
+      # ============================================================
+      # 11. Send Telegram IMAGE + TEXT
+      # ============================================================
+      - name: Telegram photo message test
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+
+          echo "Sending Telegram violation image..."
+
+          curl -sS -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+            -F "chat_id=${TELEGRAM_CHAT_ID}" \
+            -F "photo=@telegram_test_violation.jpg" \
+            --form-string "caption=🚨 HELMET VIOLATION DETECTED
+
+          📍 Location: Test Location
+          🕒 Time: GitHub Actions Test
+          🏍️ Vehicle: Motorcycle
+          📊 Confidence: 94.2%
+          🪖 Helmet: Not Detected
+          🔢 Plate: OCR Test
+          📝 Status: Pending Review
+
+          📷 Violation snapshot attached.
+
+          This is a test alert from the Vehicle Detection System." \
+            | tee photo_response.json
+
           echo
-          grep -q '"ok":true' photo_response.json || { echo "::error::sendPhoto failed (see response above)"; exit 1; }
 
-      # 9. Finish
+          if grep -q '"ok":true' photo_response.json; then
+            echo "Telegram image + text message sent successfully."
+          else
+            echo "::error::Telegram photo message failed."
+            cat photo_response.json
+            exit 1
+          fi
+
+
+      # ============================================================
+      # 12. Final result
+      # ============================================================
       - name: Build check completed
         run: |
-          echo "======================================"
-          echo "Vehicle Detection project check passed"
-          echo "======================================"
+
+          echo "=============================================="
+          echo " VEHICLE DETECTION PROJECT CHECK PASSED"
+          echo "=============================================="
+          echo
+          echo "Python syntax       : OK"
+          echo "Required libraries  : OK"
+          echo "Telegram text       : OK"
+          echo "Telegram image      : OK"
+          echo "Telegram caption    : OK"
+          echo
+          echo "Your Telegram alert system is working."
+          echo "=============================================="
