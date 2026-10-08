@@ -6,11 +6,13 @@ uploaded video, tracks each one with a persistent ID (so it's counted once,
 not once per frame), estimates rough speed, and — for two-wheelers — checks
 whether the rider is wearing a helmet, highlighting violations in red.
 
-NEW: Telegram alerts — violation snapshots can be sent automatically to a
+Telegram alerts — violation snapshots can be sent automatically to a
 Telegram chat/group (immediately, after human review, or both).
+Updated: visible send log, "Send test photo" button, and a button that sends
+all flagged snapshots on demand.
 
 Run with:
-    streamlit run vehicle_detection_app.py
+    streamlit run detection.py
 
 -----------------------------------------------------------------------------
 DEPENDENCIES
@@ -26,12 +28,14 @@ TELEGRAM SETUP
 -----------------------------------------------------------------------------
 1. In Telegram, talk to @BotFather -> /newbot -> copy the bot token.
 2. Send any message to your bot (or add it to a group and message there).
-3. Open https://api.telegram.org/bot<TOKEN>/getUpdates and copy chat -> id
-   (group IDs are negative numbers).
+3. Open https://api.telegram.org/bot<TOKEN>/getUpdates and copy
+   message -> chat -> id  (NOT the number before the colon in the token;
+   that is the bot's own ID). Group IDs are negative numbers.
 4. Store both values ONLY as GitHub secrets named TELEGRAM_BOT_TOKEN and
-   TELEGRAM_CHAT_ID (Repo -> Settings -> Secrets and variables). They are
-   injected as environment variables when the app runs in GitHub Codespaces
-   or GitHub Actions; the code never contains or asks for the token.
+   TELEGRAM_CHAT_ID. To run the app in a Codespace they must be saved under
+   Repo -> Settings -> Secrets and variables -> CODESPACES (Actions secrets
+   are only visible to workflows). Restart the Codespace after adding or
+   changing them. The code never contains or asks for the token.
    For a quick local test only, you can instead set them as environment variables:
 
    Windows (PowerShell):
@@ -117,7 +121,7 @@ if missing:
         "3. `python -m pip install torch torchvision torchaudio` "
         "(or the nightly build if that fails on your Python version)\n"
         "4. `python -m pip install --upgrade ultralytics lapx`\n"
-        "5. Restart: `streamlit run vehicle_detection_app.py`"
+        "5. Restart: `streamlit run detection.py`"
     )
     st.stop()
 
@@ -317,18 +321,19 @@ init_db()
 # Telegram alerts — send violation snapshots to a Telegram chat/group.
 # Credentials come from environment variables (never hardcode them).
 # Sending runs in a background thread so the video loop never stalls on
-# network latency.
+# network latency. Every send result (OK or the exact error) is recorded in a
+# shared log that is shown in the sidebar, so failures are no longer hidden.
 # ---------------------------------------------------------------------------
 def _get_secret(name):
     """Read from environment variables (where GitHub Codespaces/Actions secrets
     land), falling back to Streamlit's own secrets store if deployed there."""
     val = os.environ.get(name)
     if val:
-        return val
+        return val.strip()
     try:
         val = st.secrets.get(name)
         if val:
-            return str(val)
+            return str(val).strip()
     except Exception:
         pass
     return None
@@ -344,18 +349,29 @@ TELEGRAM_MODE_ACCEPTED = "Only after reviewer clicks Accept"
 TELEGRAM_MODE_BOTH = "Both (instant + confirmation)"
 
 
-def _send_telegram_photo(jpeg_bytes, caption):
+@st.cache_resource
+def get_telegram_log():
+    """Shared list that survives Streamlit reruns and is safe to append to
+    from the background sender threads."""
+    return []
+
+
+def _send_telegram_photo(jpeg_bytes, caption, log):
+    stamp = datetime.datetime.now().strftime("%H:%M:%S")
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
         r = requests.post(
-            url,
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
             data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption[:1000]},
             files={"photo": ("violation.jpg", jpeg_bytes, "image/jpeg")},
             timeout=20,
         )
-        if not r.ok:
+        if r.ok:
+            log.append(f"{stamp} ✅ photo sent")
+        else:
+            log.append(f"{stamp} ❌ FAILED {r.status_code}: {r.text[:150]}")
             print(f"Telegram error {r.status_code}: {r.text}")
     except Exception as e:
+        log.append(f"{stamp} ❌ ERROR: {e}")
         print(f"Telegram send failed: {e}")
 
 
@@ -366,6 +382,23 @@ def send_telegram_test():
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
             data={"chat_id": TELEGRAM_CHAT_ID, "text": "✅ Test from Vehicle Detection app"},
             timeout=15,
+        )
+        return r.ok, r.text
+    except Exception as e:
+        return False, str(e)
+
+
+def send_telegram_photo_test():
+    """Synchronous photo test so you can see the exact error, if any."""
+    ok_enc, buf = cv2.imencode(".jpg", np.full((200, 300, 3), 128, dtype=np.uint8))
+    if not ok_enc:
+        return False, "Could not encode test image"
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
+            data={"chat_id": TELEGRAM_CHAT_ID, "caption": "✅ Photo test from Vehicle Detection app"},
+            files={"photo": ("test.jpg", buf.tobytes(), "image/jpeg")},
+            timeout=20,
         )
         return r.ok, r.text
     except Exception as e:
@@ -388,7 +421,9 @@ def send_telegram_alert(jpeg_bytes, location, vehicle_type, track_id, confidence
         f"📝 Status: {status}"
     )
     threading.Thread(
-        target=_send_telegram_photo, args=(jpeg_bytes, caption), daemon=True
+        target=_send_telegram_photo,
+        args=(jpeg_bytes, caption, get_telegram_log()),
+        daemon=True,
     ).start()
 
 
@@ -630,6 +665,12 @@ if TELEGRAM_AVAILABLE:
             st.sidebar.success("Test message sent — check Telegram")
         else:
             st.sidebar.error(f"Failed: {detail}")
+    if st.sidebar.button("🖼️ Send test photo"):
+        ok, detail = send_telegram_photo_test()
+        if ok:
+            st.sidebar.success("Test photo sent — check Telegram")
+        else:
+            st.sidebar.error(f"Failed: {detail}")
     telegram_mode = st.sidebar.selectbox(
         "Send violation images",
         [TELEGRAM_MODE_INSTANT, TELEGRAM_MODE_ACCEPTED, TELEGRAM_MODE_BOTH, TELEGRAM_MODE_OFF],
@@ -638,6 +679,12 @@ if TELEGRAM_AVAILABLE:
             "'After Accept' sends only human-confirmed violations."
         ),
     )
+    with st.sidebar.expander("Telegram send log"):
+        _tg_log = get_telegram_log()
+        if not _tg_log:
+            st.caption("No alerts sent yet.")
+        for line in _tg_log[-10:][::-1]:
+            st.write(line)
 else:
     telegram_mode = TELEGRAM_MODE_OFF
     if not REQUESTS_AVAILABLE:
@@ -645,7 +692,8 @@ else:
     else:
         st.sidebar.warning(
             "Telegram alerts OFF — TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID were not "
-            "found in the environment. Add them as GitHub (Codespaces/Actions) secrets."
+            "found in the environment. Add them as GitHub CODESPACES secrets and "
+            "restart the Codespace."
         )
 
 uploaded_file = None
@@ -1277,7 +1325,7 @@ if source_ready and st.session_state.running:
                                 plate_number=plate_number, ai_second_opinion=second_opinion,
                             )
 
-                            # NEW: Telegram alert the moment a violation is first flagged
+                            # Telegram alert the moment a violation is first flagged
                             # (runs in a background thread; one message per rider).
                             if telegram_mode in (TELEGRAM_MODE_INSTANT, TELEGRAM_MODE_BOTH):
                                 send_telegram_alert(
@@ -1401,7 +1449,7 @@ if st.session_state.get("results_ready"):
                         update_review_status(violation_id, "accepted")
                         save_training_sample(jpeg_bytes, violation_id, accepted=True)
 
-                        # NEW: Telegram alert for a human-CONFIRMED violation
+                        # Telegram alert for a human-CONFIRMED violation
                         if telegram_mode in (TELEGRAM_MODE_ACCEPTED, TELEGRAM_MODE_BOTH):
                             matching_row = next(
                                 (r for r in fetch_all_violations() if r["violation_id"] == violation_id), None
@@ -1444,6 +1492,16 @@ if st.session_state.get("results_ready"):
         rejected_count = sum(1 for s in st.session_state.review_status.values() if s == "rejected")
         pending_count = sum(1 for s in st.session_state.review_status.values() if s == "pending")
         st.write(f"**Review status:** {accepted_count} accepted · {rejected_count} rejected · {pending_count} pending")
+
+        # Send every flagged snapshot to Telegram on demand, whatever the
+        # alert mode is set to. Handy for testing and for re-sending.
+        if TELEGRAM_AVAILABLE and st.button("📲 Send all flagged snapshots to Telegram", key="send_all_tg"):
+            for (tid, jpg, vid, conf, plate, opinion) in st.session_state.violation_snapshots:
+                send_telegram_alert(
+                    jpg, camera_location, "motorcycle/scooter", tid, conf,
+                    plate_number=plate, status="🟡 Pending review",
+                )
+            st.success("Sent. Check Telegram and the send log in the sidebar.")
 
         accepted_snapshots = [
             (vid_track_id, jpeg_bytes, violation_id, confidence, plate_number, second_opinion)
