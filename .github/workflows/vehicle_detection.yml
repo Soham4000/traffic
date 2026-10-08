@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:   # lets you run it manually from the Actions tab
 
 jobs:
   test:
@@ -55,7 +56,36 @@ jobs:
           python -c "import requests; print('Requests OK')"
           python -c "import PIL; print('Pillow OK')"
 
-      # 8. Finish
+      # 8. Telegram test (message + photo)
+      - name: Telegram test
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::error::TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing. Add them under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+          echo "Sending test message..."
+          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="✅ CI test: Telegram message works" | tee msg_response.json
+          echo
+          grep -q '"ok":true' msg_response.json || { echo "::error::sendMessage failed (see response above)"; exit 1; }
+
+          echo "Creating test image..."
+          python -c "from PIL import Image; Image.new('RGB', (300, 200), (200, 50, 50)).save('test.jpg')"
+
+          echo "Sending test photo..."
+          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto" \
+            -F chat_id="${TELEGRAM_CHAT_ID}" \
+            -F caption="✅ CI test: Telegram photo works" \
+            -F photo=@test.jpg | tee photo_response.json
+          echo
+          grep -q '"ok":true' photo_response.json || { echo "::error::sendPhoto failed (see response above)"; exit 1; }
+
+      # 9. Finish
       - name: Build check completed
         run: |
           echo "======================================"
